@@ -78,6 +78,25 @@ Following is a list of currently available resources and a brief description of 
         **Example request**::
 
             curl -F file=@/path/to/file http://localhost:8090/tasks/create/file
+            
+        **Example request using Python**::
+
+            import requests
+            import json
+            
+            REST_URL = "http://localhost:8090/tasks/create/file"
+            SAMPLE_FILE = "/path/to/malwr.exe"
+
+            with open(SAMPLE_FILE, "rb") as sample:
+                multipart_file = {"file": ("temp_file_name", sample)}
+                request = requests.post(REST_URL, files=multipart_file)
+            
+            # Add your code to error checking for request.status_code.
+            
+            json_decoder = json.JSONDecoder()
+            task_id = json_decoder.decode(request.text)["task_id"]
+            
+            # Add your code for error checking if task_id is None.
 
         **Example response**::
 
@@ -95,6 +114,7 @@ Following is a list of currently available resources and a brief description of 
             * ``platform`` *(optional)* - name of the platform to select the analysis machine from (e.g. "windows")
             * ``tags`` *(optional)* - define machine to start by tags. Platform must be set to use that. Tags are comma separated
             * ``custom`` *(optional)* - custom string to pass over the analysis and the processing/reporting modules
+            * ``owner`` *(optional)* - task owner in case multiple users can submit files to the same cuckoo instance
             * ``memory`` *(optional)* - enable the creation of a full memory dump of the analysis machine
             * ``enforce_timeout`` *(optional)* - enable to enforce the execution for the full timeout value
             * ``clock`` *(optional)* - set virtual machine clock (format %m-%d-%Y %H:%M:%S)
@@ -114,7 +134,25 @@ Following is a list of currently available resources and a brief description of 
         **Example request**::
 
             curl -F url="http://www.malicious.site" http://localhost:8090/tasks/create/url
+        
+        **Example request using Python**::
 
+            import requests
+            import json
+            
+            REST_URL = "http://localhost:8090/tasks/create/url"
+            SAMPLE_URL = "http://example.org/malwr.exe"
+            
+            multipart_url = {"url": ("", SAMPLE_URL)}
+            request = requests.post(REST_URL, files=multipart_url)
+            
+            # Add your code to error checking for request.status_code.
+            
+            json_decoder = json.JSONDecoder()
+            task_id = json_decoder.decode(request.text)["task_id"]
+            
+            # Add your code toerror checking if task_id is None.
+            
         **Example response**::
 
             {
@@ -122,7 +160,7 @@ Following is a list of currently available resources and a brief description of 
             }
 
         **Form parameters**:
-            * ``url`` *(required)* - URL to analyze
+            * ``url`` *(required)* - URL to analyze (multipart encoded content)
             * ``package`` *(optional)* - analysis package to be used for the analysis
             * ``timeout`` *(optional)* *(int)* - analysis timeout (in seconds)
             * ``priority`` *(optional)* *(int)* - priority to assign to the task (1-3)
@@ -131,6 +169,7 @@ Following is a list of currently available resources and a brief description of 
             * ``platform`` *(optional)* - name of the platform to select the analysis machine from (e.g. "windows")
             * ``tags`` *(optional)* - define machine to start by tags. Platform must be set to use that. Tags are comma separated
             * ``custom`` *(optional)* - custom string to pass over the analysis and the processing/reporting modules
+            * ``owner`` *(optional)* - task owner in case multiple users can submit files to the same cuckoo instance
             * ``memory`` *(optional)* - enable the creation of a full memory dump of the analysis machine
             * ``enforce_timeout`` *(optional)* - enable to enforce the execution for the full timeout value
             * ``clock`` *(optional)* - set virtual machine clock (format %m-%d-%Y %H:%M:%S)
@@ -156,48 +195,50 @@ Following is a list of currently available resources and a brief description of 
             {
                 "tasks": [
                     {
-                        "category": "url", 
-                        "machine": null, 
-                        "errors": [], 
-                        "target": "http://www.malicious.site", 
-                        "package": null, 
-                        "sample_id": null, 
-                        "guest": {}, 
-                        "custom": null, 
-                        "priority": 1, 
-                        "platform": null, 
-                        "options": null, 
-                        "status": "pending", 
-                        "enforce_timeout": false, 
-                        "timeout": 0, 
+                        "category": "url",
+                        "machine": null,
+                        "errors": [],
+                        "target": "http://www.malicious.site",
+                        "package": null,
+                        "sample_id": null,
+                        "guest": {},
+                        "custom": null,
+                        "owner": "",
+                        "priority": 1,
+                        "platform": null,
+                        "options": null,
+                        "status": "pending",
+                        "enforce_timeout": false,
+                        "timeout": 0,
                         "memory": false,
                         "tags": []
-                        "id": 1, 
-                        "added_on": "2012-12-19 14:18:25", 
+                        "id": 1,
+                        "added_on": "2012-12-19 14:18:25",
                         "completed_on": null
-                    }, 
+                    },
                     {
-                        "category": "file", 
-                        "machine": null, 
-                        "errors": [], 
-                        "target": "/tmp/malware.exe", 
-                        "package": null, 
-                        "sample_id": 1, 
-                        "guest": {}, 
-                        "custom": null, 
-                        "priority": 1, 
-                        "platform": null, 
-                        "options": null, 
-                        "status": "pending", 
-                        "enforce_timeout": false, 
-                        "timeout": 0, 
+                        "category": "file",
+                        "machine": null,
+                        "errors": [],
+                        "target": "/tmp/malware.exe",
+                        "package": null,
+                        "sample_id": 1,
+                        "guest": {},
+                        "custom": null,
+                        "owner": "",
+                        "priority": 1,
+                        "platform": null,
+                        "options": null,
+                        "status": "pending",
+                        "enforce_timeout": false,
+                        "timeout": 0,
                         "memory": false,
                         "tags": [
                                     "32bit",
                                     "acrobat_6",
                                 ],
-                        "id": 2, 
-                        "added_on": "2012-12-19 14:18:25", 
+                        "id": 2,
+                        "added_on": "2012-12-19 14:18:25",
                         "completed_on": null
                     }
                 ]
@@ -235,6 +276,7 @@ Following is a list of currently available resources and a brief description of 
                     "sample_id": null,
                     "guest": {},
                     "custom": null,
+                    "owner": "",
                     "priority": 1,
                     "platform": null,
                     "options": null,
@@ -343,14 +385,14 @@ Following is a list of currently available resources and a brief description of 
 
             {
                 "sample": {
-                    "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709", 
-                    "file_type": "empty", 
-                    "file_size": 0, 
-                    "crc32": "00000000", 
-                    "ssdeep": "3::", 
-                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 
-                    "sha512": "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e", 
-                    "id": 1, 
+                    "sha1": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+                    "file_type": "empty",
+                    "file_size": 0,
+                    "crc32": "00000000",
+                    "ssdeep": "3::",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    "sha512": "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+                    "id": 1,
                     "md5": "d41d8cd98f00b204e9800998ecf8427e"
                 }
             }
@@ -385,7 +427,7 @@ Following is a list of currently available resources and a brief description of 
 .. _pcap_get:
 
 /pcap/get
-----------
+---------
 
     **GET /pcap/get/** *(int: task)*
 
@@ -418,21 +460,21 @@ Following is a list of currently available resources and a brief description of 
             {
                 "machines": [
                     {
-                        "status": null, 
-                        "locked": false, 
-                        "name": "cuckoo1", 
+                        "status": null,
+                        "locked": false,
+                        "name": "cuckoo1",
                         "resultserver_ip": "192.168.56.1",
                         "ip": "192.168.56.101",
                         "tags": [
                                     "32bit",
                                     "acrobat_6",
                                 ],
-                        "label": "cuckoo1", 
-                        "locked_changed_on": null, 
-                        "platform": "windows", 
+                        "label": "cuckoo1",
+                        "locked_changed_on": null,
+                        "platform": "windows",
                         "snapshot": null,
                         "interface": null,
-                        "status_changed_on": null, 
+                        "status_changed_on": null,
                         "id": 1,
                         "resultserver_port": "2042"
                     }
@@ -500,22 +542,22 @@ Following is a list of currently available resources and a brief description of 
 
             {
                 "tasks": {
-                    "reported": 165, 
-                    "running": 2, 
-                    "total": 167, 
-                    "completed": 0, 
+                    "reported": 165,
+                    "running": 2,
+                    "total": 167,
+                    "completed": 0,
                     "pending": 0
-                }, 
+                },
                 "version": "1.0",
                 "protocol_version": 1,
-                "hostname": "Patient0", 
+                "hostname": "Patient0",
                 "machines": {
-                    "available": 4, 
+                    "available": 4,
                     "total": 5
                 }
                 "tools":["vanilla"]
             }
-            
+
         **Status codes**:
             * ``200`` - no error
             * ``404`` - machine not found

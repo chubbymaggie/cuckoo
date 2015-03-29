@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (C) 2010-2014 Cuckoo Foundation.
+# Copyright (C) 2010-2015 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -8,6 +8,7 @@ import sys
 import time
 import logging
 import argparse
+import signal
 import multiprocessing
 
 logging.basicConfig(level=logging.INFO)
@@ -20,15 +21,17 @@ from lib.cuckoo.common.constants import CUCKOO_ROOT
 from lib.cuckoo.core.database import Database, TASK_REPORTED, TASK_COMPLETED
 from lib.cuckoo.core.database import TASK_FAILED_PROCESSING
 from lib.cuckoo.core.plugins import RunProcessing, RunSignatures, RunReporting
-from lib.cuckoo.core.startup import init_modules
+from lib.cuckoo.core.startup import init_modules, drop_privileges
 
-def process(aid, target=None, copy_path=None, report=False, auto=False):
-    results = RunProcessing(task_id=aid).run()
+def process(task_id, target=None, copy_path=None, report=False, auto=False):
+    assert isinstance(task_id, int)
+
+    results = RunProcessing(task_id=task_id).run()
     RunSignatures(results=results).run()
 
     if report:
-        RunReporting(task_id=aid, results=results).run()
-        Database().set_status(aid, TASK_REPORTED)
+        RunReporting(task_id=task_id, results=results).run()
+        Database().set_status(task_id, TASK_REPORTED)
 
         if auto:
             if cfg.cuckoo.delete_original and os.path.exists(target):
@@ -37,64 +40,84 @@ def process(aid, target=None, copy_path=None, report=False, auto=False):
             if cfg.cuckoo.delete_bin_copy and os.path.exists(copy_path):
                 os.unlink(copy_path)
 
+def init_worker():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
 def autoprocess(parallel=1):
     maxcount = cfg.cuckoo.max_analysis_count
     count = 0
     db = Database()
-    pool = multiprocessing.Pool(parallel)
+    pool = multiprocessing.Pool(parallel, init_worker)
     pending_results = []
 
-    # CAUTION - big ugly loop ahead.
-    while count < maxcount or not maxcount:
+    try:
+        # CAUTION - big ugly loop ahead.
+        while count < maxcount or not maxcount:
 
-        # Pending_results maintenance.
-        for ar, tid, target, copy_path in list(pending_results):
-            if ar.ready():
-                if ar.successful():
-                    log.info("Task #%d: reports generation completed", tid)
-                else:
-                    try:
-                        ar.get()
-                    except:
-                        log.exception("Exception when processing task ID %u.", tid)
-                        db.set_status(tid, TASK_FAILED_PROCESSING)
+            # Pending_results maintenance.
+            for ar, tid, target, copy_path in list(pending_results):
+                if ar.ready():
+                    if ar.successful():
+                        log.info("Task #%d: reports generation completed", tid)
+                    else:
+                        try:
+                            ar.get()
+                        except:
+                            log.exception("Exception when processing task ID %u.", tid)
+                            db.set_status(tid, TASK_FAILED_PROCESSING)
 
-                pending_results.remove((ar, tid, target, copy_path))
+                    pending_results.remove((ar, tid, target, copy_path))
 
-        # If still full, don't add more (necessary despite pool).
-        if len(pending_results) >= parallel:
-            time.sleep(1)
-            continue
-
-        # If we're here, getting #parallel tasks should at least have one we don't know.
-        tasks = db.list_tasks(status=TASK_COMPLETED, limit=parallel)
-
-        # For loop to add only one, nice.
-        for task in tasks:
-            # Not-so-efficient lock.
-            if task.id in [tid for ar, tid, target, copy_path
-                           in pending_results]:
+            # If still full, don't add more (necessary despite pool).
+            if len(pending_results) >= parallel:
+                time.sleep(5)
                 continue
 
-            log.info("Processing analysis data for Task #%d", task.id)
+            # If we're here, getting parallel tasks should at least
+            # have one we don't know.
+            tasks = db.list_tasks(status=TASK_COMPLETED, limit=parallel,
+                                  order_by="completed_on asc")
 
-            sample = db.view_sample(task.sample_id)
+            added = False
+            # For loop to add only one, nice. (reason is that we shouldn't overshoot maxcount)
+            for task in tasks:
+                # Not-so-efficient lock.
+                if task.id in [tid for ar, tid, target, copy_path
+                               in pending_results]:
+                    continue
 
-            copy_path = os.path.join(CUCKOO_ROOT, "storage",
-                                     "binaries", sample.sha256)
+                log.info("Processing analysis data for Task #%d", task.id)
 
-            args = task.id, task.target, copy_path
-            kwargs = dict(report=True, auto=True)
-            result = pool.apply_async(process, args, kwargs)
+                if task.category == "file":
+                    sample = db.view_sample(task.sample_id)
 
-            pending_results.append((result, task.id, task.target, copy_path))
+                    copy_path = os.path.join(CUCKOO_ROOT, "storage",
+                                             "binaries", sample.sha256)
+                else:
+                    copy_path = None
 
-            count += 1
-            break
+                args = int(task.id), task.target, copy_path
+                kwargs = dict(report=True, auto=True)
+                result = pool.apply_async(process, args, kwargs)
 
-        # If there wasn't anything to add, sleep tight.
-        if not tasks:
-            time.sleep(5)
+                pending_results.append((result, task.id, task.target, copy_path))
+
+                count += 1
+                added = True
+                break
+
+            if not added:
+                # don't hog cpu
+                time.sleep(5)
+
+    except KeyboardInterrupt:
+        pool.terminate()
+        raise
+    except:
+        import traceback
+        traceback.print_exc()
+    finally:
+        pool.join()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -102,7 +125,11 @@ def main():
     parser.add_argument("-d", "--debug", help="Display debug messages", action="store_true", required=False)
     parser.add_argument("-r", "--report", help="Re-generate report", action="store_true", required=False)
     parser.add_argument("-p", "--parallel", help="Number of parallel threads to use (auto mode only).", type=int, required=False, default=1)
+    parser.add_argument("-u", "--user", type=str, help="Drop user privileges to this user")
     args = parser.parse_args()
+
+    if args.user:
+        drop_privileges(args.user)
 
     if args.debug:
         log.setLevel(logging.DEBUG)
@@ -112,7 +139,7 @@ def main():
     if args.id == "auto":
         autoprocess(parallel=args.parallel)
     else:
-        process(args.id, report=args.report)
+        process(int(args.id), report=args.report)
 
 
 if __name__ == "__main__":

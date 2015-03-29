@@ -1,4 +1,4 @@
-# Copyright (C) 2010-2014 Cuckoo Foundation.
+# Copyright (C) 2010-2015 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -21,9 +21,14 @@ try:
     import volatility.plugins.taskmods as taskmods
     import volatility.win32.tasks as tasks
     import volatility.obj as obj
+    import volatility.exceptions as exc
+    import volatility.plugins.filescan as filescan
+
     HAVE_VOLATILITY = True
-    logging.getLogger("volatility.obj").setLevel(logging.INFO)
-    logging.getLogger("volatility.utils").setLevel(logging.INFO)
+    rootlogger = logging.getLogger()
+    # re-use the rootlogger level (so if we want to debug, it works for volatility)
+    logging.getLogger("volatility.obj").setLevel(rootlogger.level)
+    logging.getLogger("volatility.utils").setLevel(rootlogger.level)
 except ImportError:
     HAVE_VOLATILITY = False
 
@@ -40,10 +45,24 @@ class VolatilityAPI(object):
         self.memdump = memdump
         self.osprofile = osprofile
         self.config = None
+        self.addr_space = None
         self.__config()
+
+    def _get_dtb(self):
+        """Use psscan to get system dtb and apply it."""
+        ps = filescan.PSScan(self.config)
+        for ep in ps.calculate():
+            if str(ep.ImageFileName) == "System":
+                self.config.update("dtb",ep.Pcb.DirectoryTableBase)
+                return True
+        return False
+
 
     def __config(self):
         """Creates a volatility configuration."""
+        if self.config != None and self.addr_space != None:
+            return self.config
+
         self.config = conf.ConfObject()
         self.config.optparser.set_conflict_handler("resolve")
         registry.register_global_options(self.config, commands.Command)
@@ -77,7 +96,16 @@ class VolatilityAPI(object):
         for key, value in base_conf.items():
             self.config.update(key, value)
 
-        self.addr_space = utils.load_as(self.config)
+        # Deal with Volatility support for KVM/qemu memory dump.
+        # See: #464.
+        try:
+            self.addr_space = utils.load_as(self.config)
+        except exc.AddrSpaceError as e:
+            if self._get_dtb():
+                self.addr_space = utils.load_as(self.config)
+            else:
+                raise
+
         self.plugins = registry.get_plugin_classes(commands.Command,
                                                    lower=True)
 
@@ -150,7 +178,7 @@ class VolatilityAPI(object):
 
         command = self.plugins["callbacks"](self.config)
         for (sym, cb, detail), mods, mod_addrs in command.calculate():
-            module = tasks.find_module(mods, mod_addrs, command.kern_space.address_mask(cb))
+            module = tasks.find_module(mods, mod_addrs, self.addr_space.address_mask(cb))
 
             if module:
                 module_name = module.BaseDllName or module.FullDllName
@@ -266,7 +294,7 @@ class VolatilityAPI(object):
         command = self.plugins["ssdt"](self.config)
 
         # Comment: this code is pretty much ripped from render_text in volatility.
-        addr_space = utils.load_as(self.config)
+        addr_space = self.addr_space
         syscalls = addr_space.profile.syscalls
         bits32 = addr_space.profile.metadata.get("memory_model", "32bit") == "32bit"
 
@@ -725,7 +753,8 @@ class VolatilityAPI(object):
         results = []
 
         command = self.plugins["mutantscan"](self.config)
-        for object_obj, mutant in command.calculate():
+        for mutant in command.calculate():
+            header = mutant.get_object_header()
             tid = 0
             pid = 0
             if mutant.OwnerThread > 0x80000000:
@@ -735,10 +764,10 @@ class VolatilityAPI(object):
 
             new = {
                 "mutant_offset": "{0:#x}".format(mutant.obj_offset),
-                "num_pointer": int(object_obj.PointerCount),
-                "num_handles": int(object_obj.HandleCount),
+                "num_pointer": int(header.PointerCount),
+                "num_handles": int(header.HandleCount),
                 "mutant_signal_state": str(mutant.Header.SignalState),
-                "mutant_name": str(object_obj.NameInfo.Name or ""),
+                "mutant_name": str(header.NameInfo.Name or ""),
                 "process_id": int(pid),
                 "thread_id": int(tid)
             }
@@ -757,7 +786,7 @@ class VolatilityAPI(object):
         results = []
 
         command = self.plugins["devicetree"](self.config)
-        for _object_obj, driver_obj, _ in command.calculate():
+        for driver_obj in command.calculate():
             new = {
                 "driver_offset": "0x{0:08x}".format(driver_obj.obj_offset),
                 "driver_name": str(driver_obj.DriverName or ""),

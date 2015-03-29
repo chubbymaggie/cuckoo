@@ -1,4 +1,4 @@
-# Copyright (C) 2010-2014 Cuckoo Foundation.
+# Copyright (C) 2010-2015 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -47,10 +47,10 @@ class ResultServer(SocketServer.ThreadingTCPServer, object):
         self.analysishandlers = {}
 
         ip = self.cfg.resultserver.ip
-        port = int(self.cfg.resultserver.port)
+        self.port = int(self.cfg.resultserver.port)
         while True:
             try:
-                server_addr = ip, port
+                server_addr = ip, self.port
                 SocketServer.ThreadingTCPServer.__init__(self,
                                                          server_addr,
                                                          ResultHandler,
@@ -63,14 +63,14 @@ class ResultServer(SocketServer.ThreadingTCPServer, object):
                 # EADDRINUSE 48 (Address already in use)
                 if e.errno == 98 or e.errno == 48:
                     log.warning("Cannot bind ResultServer on port {0}, "
-                                "trying another port.".format(port))
-                    port += 1
+                                "trying another port.".format(self.port))
+                    self.port += 1
                 else:
                     raise CuckooCriticalError("Unable to bind ResultServer on "
                                               "{0}:{1}: {2}".format(
-                                                  ip, port, str(e)))
+                                                  ip, self.port, str(e)))
             else:
-                log.debug("ResultServer running on {0}:{1}.".format(ip, port))
+                log.debug("ResultServer running on {0}:{1}.".format(ip, self.port))
                 self.servethread = Thread(target=self.serve_forever)
                 self.servethread.setDaemon(True)
                 self.servethread.start()
@@ -316,7 +316,7 @@ class FileUpload(object):
 
         dir_part, filename = os.path.split(buf)
 
-        if "./" in buf or not dir_part:
+        if "./" in buf or not dir_part or buf.startswith("/"):
             raise CuckooOperationalError("FileUpload failure, banned path.")
 
         for restricted in self.RESTRICTED_DIRECTORIES:
@@ -331,12 +331,20 @@ class FileUpload(object):
 
         file_path = os.path.join(self.storagepath, buf.strip())
 
+        if not file_path.startswith(self.storagepath):
+            raise CuckooOperationalError("FileUpload failure, path sanitization failed.")
+
+        if os.path.exists(file_path):
+            log.warning("Analyzer tried to overwrite an existing file, closing connection.")
+            return False
+
         self.fd = open(file_path, "wb")
         chunk = self.handler.read_any()
         while chunk:
             self.fd.write(chunk)
 
             if self.fd.tell() >= self.upload_max_size:
+                log.warning("Uploaded file length larger than upload_max_size, stopping upload.")
                 self.fd.write("... (truncated)")
                 break
 
@@ -377,3 +385,16 @@ class LogHandler(object):
     def _open(self):
         if not os.path.exists(self.logpath):
             return open(self.logpath, "wb")
+
+        log.debug("Log analysis.log already existing, appending data.")
+        fd = open(self.logpath, "ab")
+
+        # add a fake log entry, saying this had to be re-opened
+        #  use the same format as the default logger, in case anyone wants to parse this
+        #  2015-02-23 12:05:05,092 [lib.api.process] DEBUG: Using QueueUserAPC injection.
+        now = datetime.datetime.now()
+        print >>fd, "\n%s,%03.0f [lib.core.resultserver] WARNING: This log file was re-opened, log entries will be appended." % (
+            now.strftime("%Y-%m-%d %H:%M:%S"), now.microsecond / 1000.0
+        )
+
+        return fd
